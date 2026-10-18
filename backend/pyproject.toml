@@ -1,0 +1,20 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "tsuyoshi", email = "tsuyoshi3627@icloud.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=2.31.0",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"
