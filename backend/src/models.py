@@ -53,6 +53,10 @@ class Interviewer(BaseModel):
         default=None,
         description="人物特徴・性格・質問スタンス（オプショナル。空欄時は役割からAIがリアルなペルソナを自動補完）"
     )
+    gender: str = Field(
+        default="male",
+        description="面接官の性別 ('male' | 'female')。声色自動割り当てに使用"
+    )
     voice_preset: str = Field(
         default="male_low",
         description="音声合成プリセット (male_low, male_calm, female_calm, female_energetic)"

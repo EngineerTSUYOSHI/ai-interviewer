@@ -1,5 +1,6 @@
 /**
  * AI Interviewer - Frontend Application Logic
+ * Step 3: Web Speech API Integration (STT & Voice-Differentiated TTS)
  * Smart Extraction, Realtime WebSocket Interview, Dynamic Audio UX, and Evaluation Dashboard.
  */
 
@@ -7,9 +8,14 @@
 const state = {
   ws: null,
   isThoughtsVisible: true, // 練習モード (true) vs 本番モード (false)
+  isVoiceMode: true,       // 音声対話 (true) vs テキスト対話のみ (false)
+  isRecording: false,      // 現在マイク認識中か
+  recognition: null,       // SpeechRecognition インスタンス
+  silenceTimer: null,      // 発話後の無音自動送信タイマー
   interviewers: [],
   currentPhase: "ORIENTATION",
   lastEvaluationReport: null,
+  availableVoices: [],     // ブラウザ搭載の音声リスト
 };
 
 // デフォルト面接官リスト (1〜5名)
@@ -18,26 +24,44 @@ const defaultInterviewers = [
     id: "interviewer_1",
     name: "佐藤 健一",
     role: "テックリード / アーキテクト",
+    gender: "male",
     personality: "",
     is_lead: true,
-    voice_preset: "male_low",
   },
   {
     id: "interviewer_2",
     name: "高橋 美咲",
     role: "人事採用責任者 (HRBP)",
+    gender: "female",
     personality: "",
     is_lead: false,
-    voice_preset: "female_calm",
   },
   {
     id: "interviewer_3",
     name: "渡辺 徹",
     role: "執行役員 CTO",
+    gender: "male",
     personality: "",
     is_lead: false,
-    voice_preset: "male_calm",
   },
+];
+
+// 男性の声リスト（最大5バリエーション: ピッチと速度の組み合わせ）
+const MALE_VOICE_PRESETS = [
+  { pitch: 0.85, rate: 1.00, label: "男性①: 落ち着いた低音" },
+  { pitch: 0.72, rate: 0.95, label: "男性②: 重厚で深みのある声" },
+  { pitch: 0.95, rate: 1.02, label: "男性③: 標準的で明瞭な声" },
+  { pitch: 1.05, rate: 1.05, label: "男性④: 若手・爽やかな声" },
+  { pitch: 0.80, rate: 1.05, label: "男性⑤: テキパキした低音" },
+];
+
+// 女性の声リスト（最大5バリエーション）
+const FEMALE_VOICE_PRESETS = [
+  { pitch: 1.15, rate: 1.00, label: "女性①: 落ち着いた明瞭な声" },
+  { pitch: 1.30, rate: 1.05, label: "女性②: ハキハキと明るい声" },
+  { pitch: 1.05, rate: 0.98, label: "女性③: 穏やかで柔らかな声" },
+  { pitch: 1.20, rate: 1.08, label: "女性④: 快活でテキパキした声" },
+  { pitch: 1.10, rate: 1.02, label: "女性⑤: 深みのあるトーン" },
 ];
 
 // 面接官アバターカラー
@@ -56,8 +80,207 @@ document.addEventListener("DOMContentLoaded", () => {
   setupDropzones();
   setupInterviewerCards();
   setupEventHandlers();
-  loadPresetData(); // 初期値としてプリセットを読み込んでおく
+  loadPresetData();
+  initVoices();
+  initSpeechRecognition();
 });
+
+// ==========================================================================
+// Web Speech API: 音声初期化 ＆ 声色自動割り当てロジック
+// ==========================================================================
+function initVoices() {
+  if (!("speechSynthesis" in window)) return;
+  const load = () => {
+    state.availableVoices = window.speechSynthesis.getVoices().filter(v => v.lang.includes("ja") || v.lang.includes("JP"));
+  };
+  load();
+  if (window.speechSynthesis.onvoiceschanged !== undefined) {
+    window.speechSynthesis.onvoiceschanged = load;
+  }
+}
+
+/**
+ * 面接官リストの性別と並び順に基づき、声のパラメータを自動アサインする
+ */
+function getInterviewerVoiceConfig(interviewerId) {
+  let maleIndex = 0;
+  let femaleIndex = 0;
+
+  for (const inv of state.interviewers) {
+    const isMale = (inv.gender || "male") === "male";
+    if (inv.id === interviewerId) {
+      if (isMale) {
+        const preset = MALE_VOICE_PRESETS[maleIndex % MALE_VOICE_PRESETS.length];
+        return { ...preset, gender: "male" };
+      } else {
+        const preset = FEMALE_VOICE_PRESETS[femaleIndex % FEMALE_VOICE_PRESETS.length];
+        return { ...preset, gender: "female" };
+      }
+    }
+    if (isMale) maleIndex++;
+    else femaleIndex++;
+  }
+
+  return { pitch: 1.0, rate: 1.0, gender: "male" };
+}
+
+/**
+ * 面接官の発言を音声合成 (TTS) で読み上げる
+ */
+function speakInterviewerUtterance(speakerId, text, onEndCallback) {
+  if (!state.isVoiceMode || !("speechSynthesis" in window)) {
+    if (onEndCallback) onEndCallback();
+    return;
+  }
+
+  // 面接官が発話中はマイクを完全に自動ロック（咳払いやノイズ誤認識を防止）
+  stopSpeechRecognition();
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voiceConfig = getInterviewerVoiceConfig(speakerId);
+
+  utterance.pitch = voiceConfig.pitch;
+  utterance.rate = voiceConfig.rate;
+  utterance.lang = "ja-JP";
+
+  // ブラウザ日本語音声があれば設定
+  if (state.availableVoices.length > 0) {
+    // 日本語音声の中から選択
+    utterance.voice = state.availableVoices[0];
+  }
+
+  utterance.onstart = () => {
+    updateAudioUxStatus("speaking", "面接官が発話中です。話し終わるまでお待ちください...（マイク自動ロック中）", speakerId);
+  };
+
+  utterance.onend = () => {
+    updateAudioUxStatus("waiting_candidate", "面接官が話し終えました。マイクが有効です。お話しください。", null);
+    if (onEndCallback) onEndCallback();
+    // 話し終わったら自動的にマイクを有効化
+    if (state.isVoiceMode) {
+      startSpeechRecognition();
+    }
+  };
+
+  utterance.onerror = (e) => {
+    console.error("SpeechSynthesis Error:", e);
+    updateAudioUxStatus("waiting_candidate", "面接官が話し終えました。マイクが有効です。", null);
+    if (onEndCallback) onEndCallback();
+    if (state.isVoiceMode) {
+      startSpeechRecognition();
+    }
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
+
+// ==========================================================================
+// Web Speech API: 音声認識 (STT - Speech-to-Text)
+// ==========================================================================
+function initSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    console.warn("このブラウザは SpeechRecognition をサポートしていません。");
+    const micBtn = document.getElementById("btn-mic-toggle");
+    if (micBtn) micBtn.disabled = true;
+    return;
+  }
+
+  const rec = new SpeechRecognition();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = "ja-JP";
+
+  rec.onstart = () => {
+    state.isRecording = true;
+    updateMicButtonState(true);
+  };
+
+  rec.onresult = (event) => {
+    let interim = "";
+    let final = "";
+
+    for (let i = event.resultIndex; i < event.results.length; ++i) {
+      if (event.results[i].isFinal) {
+        final += event.results[i][0].transcript;
+      } else {
+        interim += event.results[i][0].transcript;
+      }
+    }
+
+    const inputEl = document.getElementById("candidate-chat-input");
+    if (final) {
+      inputEl.value = (inputEl.value + " " + final).trim();
+      // 発話後に2.5秒間無音なら自動送信
+      resetSilenceTimer();
+    } else if (interim) {
+      inputEl.placeholder = `聞き取り中: ${interim}...`;
+      clearTimeout(state.silenceTimer);
+    }
+  };
+
+  rec.onerror = (event) => {
+    console.warn("SpeechRecognition Error:", event.error);
+    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      state.isVoiceMode = false;
+      updateVoiceModeToggleUI();
+      alert("マイクの利用が許可されていません。テキスト入力をご利用ください。");
+    }
+  };
+
+  rec.onend = () => {
+    state.isRecording = false;
+    updateMicButtonState(false);
+  };
+
+  state.recognition = rec;
+}
+
+function startSpeechRecognition() {
+  if (!state.isVoiceMode || !state.recognition || state.isRecording) return;
+  try {
+    state.recognition.start();
+  } catch (err) {
+    // 既に開始されている場合の例外を安全に吸収
+  }
+}
+
+function stopSpeechRecognition() {
+  if (state.recognition && state.isRecording) {
+    try {
+      state.recognition.stop();
+    } catch (err) {}
+  }
+  clearTimeout(state.silenceTimer);
+  updateMicButtonState(false);
+}
+
+function resetSilenceTimer() {
+  clearTimeout(state.silenceTimer);
+  state.silenceTimer = setTimeout(() => {
+    const inputEl = document.getElementById("candidate-chat-input");
+    if (inputEl.value.trim() && state.isRecording) {
+      sendCandidateMessage();
+    }
+  }, 2500); // 2.5秒の無音で自動送信
+}
+
+function updateMicButtonState(recording) {
+  const micBtn = document.getElementById("btn-mic-toggle");
+  const waveEl = document.getElementById("mic-waveform-container");
+  if (!micBtn) return;
+
+  if (recording) {
+    micBtn.classList.add("recording");
+    micBtn.innerHTML = `<span class="mic-icon">⏹️</span>`;
+    if (waveEl) waveEl.classList.remove("hidden");
+  } else {
+    micBtn.classList.remove("recording");
+    micBtn.innerHTML = `<span class="mic-icon">🎙️</span>`;
+    if (waveEl) waveEl.classList.add("hidden");
+  }
+}
 
 // ==========================================================================
 // タブ切り替え制御
@@ -81,7 +304,6 @@ function setupTabs() {
 // ドロップゾーン（ファイルアップロード）
 // ==========================================================================
 function setupDropzones() {
-  // 求人票ドロップゾーン
   const dropJob = document.getElementById("dropzone-job");
   const fileJob = document.getElementById("file-job");
   dropJob.addEventListener("click", () => fileJob.click());
@@ -96,7 +318,6 @@ function setupDropzones() {
     if (e.target.files.length > 0) handleJobFileUpload(e.target.files[0]);
   });
 
-  // 職務経歴書ドロップゾーン
   const dropCand = document.getElementById("dropzone-candidate");
   const fileCand = document.getElementById("file-candidate");
   dropCand.addEventListener("click", () => fileCand.click());
@@ -296,7 +517,7 @@ function showError(el, msg) {
 }
 
 // ==========================================================================
-// 面接官管理カード（1〜5名）
+// 面接官管理カード（性別選択 ＆ 自動声色アサイン）
 // ==========================================================================
 function setupInterviewerCards() {
   const container = document.getElementById("interviewers-list");
@@ -314,6 +535,8 @@ function setupInterviewerCards() {
       ? `<button class="btn-remove" onclick="removeInterviewer(${idx})" title="削除">✕</button>`
       : "";
 
+    const gender = interviewer.gender || "male";
+
     card.innerHTML = `
       <div class="interviewer-card-top">
         <div class="flex-row items-center gap-2">
@@ -327,14 +550,26 @@ function setupInterviewerCards() {
           ${removeBtn}
         </div>
       </div>
-      <div class="input-group mb-2">
-        <label>面接官氏名</label>
-        <input type="text" value="${escapeHtml(interviewer.name)}" onchange="updateInterviewerField(${idx}, 'name', this.value)">
+
+      <div class="flex-row gap-2 mb-2">
+        <div class="input-group" style="flex: 2;">
+          <label>面接官氏名</label>
+          <input type="text" value="${escapeHtml(interviewer.name)}" onchange="updateInterviewerField(${idx}, 'name', this.value)">
+        </div>
+        <div class="input-group" style="flex: 1;">
+          <label>性別（声色自動）</label>
+          <div class="gender-selector">
+            <button class="gender-btn ${gender === 'male' ? 'active' : ''}" onclick="setInterviewerGender(${idx}, 'male')">👨 男性</button>
+            <button class="gender-btn ${gender === 'female' ? 'active' : ''}" onclick="setInterviewerGender(${idx}, 'female')">👩 女性</button>
+          </div>
+        </div>
       </div>
+
       <div class="input-group mb-2">
         <label>役職・役割 * (例: テックリード, 人事, CTO)</label>
         <input type="text" value="${escapeHtml(interviewer.role)}" placeholder="必須" onchange="updateInterviewerField(${idx}, 'role', this.value)">
       </div>
+
       <div class="input-group">
         <div class="flex-between">
           <label>性格・人物特徴 (空欄時はAI自動補完)</label>
@@ -346,6 +581,11 @@ function setupInterviewerCards() {
     container.appendChild(card);
   });
 }
+
+window.setInterviewerGender = function(index, gender) {
+  state.interviewers[index].gender = gender;
+  setupInterviewerCards();
+};
 
 window.updateInterviewerField = function(index, field, value) {
   state.interviewers[index][field] = value;
@@ -399,9 +639,9 @@ function addInterviewer() {
     id: `interviewer_${state.interviewers.length + 1}`,
     name: `面接官 ${state.interviewers.length + 1}`,
     role: "現場エンジニア",
+    gender: "male",
     personality: "",
     is_lead: false,
-    voice_preset: "male_calm",
   });
   setupInterviewerCards();
 }
@@ -447,6 +687,26 @@ function setupEventHandlers() {
   document.getElementById("btn-restart").addEventListener("click", () => location.reload());
   document.getElementById("btn-download-report").addEventListener("click", downloadReportMarkdown);
 
+  // マイクボタンクリック（手動ON/OFF）
+  document.getElementById("btn-mic-toggle").addEventListener("click", () => {
+    if (state.isRecording) {
+      stopSpeechRecognition();
+    } else {
+      startSpeechRecognition();
+    }
+  });
+
+  // 音声対話モード切替トグル
+  const voiceToggleBtn = document.getElementById("toggle-voice-mode");
+  voiceToggleBtn.addEventListener("click", () => {
+    state.isVoiceMode = !state.isVoiceMode;
+    updateVoiceModeToggleUI();
+    if (!state.isVoiceMode) {
+      stopSpeechRecognition();
+      window.speechSynthesis.cancel();
+    }
+  });
+
   // 心の声メモ表示トグル
   const toggleBtn = document.getElementById("toggle-thoughts");
   toggleBtn.addEventListener("click", () => {
@@ -473,6 +733,17 @@ function setupEventHandlers() {
   });
 }
 
+function updateVoiceModeToggleUI() {
+  const voiceToggleBtn = document.getElementById("toggle-voice-mode");
+  if (state.isVoiceMode) {
+    voiceToggleBtn.textContent = "音声対話 (ON)";
+    voiceToggleBtn.classList.add("active");
+  } else {
+    voiceToggleBtn.textContent = "テキスト対話 (OFF)";
+    voiceToggleBtn.classList.remove("active");
+  }
+}
+
 // ==========================================================================
 // WebSocket リアルタイム面接セッション
 // ==========================================================================
@@ -490,7 +761,6 @@ function startInterviewSession() {
   document.getElementById("setup-view").classList.remove("active");
   document.getElementById("interview-view").classList.add("active");
 
-  // WebSocket の接続
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${protocol}//${window.location.host}/ws/interview`;
   state.ws = new WebSocket(wsUrl);
@@ -500,7 +770,6 @@ function startInterviewSession() {
   state.ws.onopen = () => {
     statusText.textContent = "Connected";
 
-    // セッション開始ペイロード
     const payload = {
       company: {
         name: companyName,
@@ -531,6 +800,7 @@ function startInterviewSession() {
 
   state.ws.onclose = () => {
     statusText.textContent = "Disconnected";
+    stopSpeechRecognition();
   };
 
   state.ws.onerror = (err) => {
@@ -553,6 +823,9 @@ function handleWsEvent(data) {
     case "INTERVIEWER_UTTERANCE":
       appendInterviewerMessage(data.utterance);
       if (data.current_phase) updatePhaseStepper(data.current_phase);
+
+      // 面接官の発言をTTSで読み上げ（読み上げ中はマイク自動ロック ➔ 終了後にマイク有効化）
+      speakInterviewerUtterance(data.utterance.speaker_id, data.utterance.content);
       break;
 
     case "INTERVIEW_CLOSING":
@@ -560,6 +833,8 @@ function handleWsEvent(data) {
       break;
 
     case "EVALUATION_STARTED":
+      stopSpeechRecognition();
+      window.speechSynthesis.cancel();
       openEvaluationModal();
       break;
 
@@ -591,10 +866,12 @@ function renderRoomInterviewers() {
     chip.className = "room-interviewer-chip";
 
     const color = INTERVIEWER_COLORS[idx % INTERVIEWER_COLORS.length];
+    const genderIcon = (interviewer.gender || "male") === "male" ? "👨" : "👩";
+
     chip.innerHTML = `
       <div class="avatar-circle" style="background: ${color.bg}">${interviewer.name[0]}</div>
       <div>
-        <div class="chip-name">${escapeHtml(interviewer.name)}</div>
+        <div class="chip-name">${escapeHtml(interviewer.name)} <span style="font-size:11px;">${genderIcon}</span></div>
         <div class="chip-role">${escapeHtml(interviewer.role)}</div>
       </div>
     `;
@@ -607,6 +884,7 @@ function updateAudioUxStatus(status, message, speakerId) {
   const textEl = document.getElementById("audio-ux-text");
   const inputEl = document.getElementById("candidate-chat-input");
   const sendBtn = document.getElementById("btn-send-message");
+  const micBtn = document.getElementById("btn-mic-toggle");
 
   textEl.textContent = message;
 
@@ -619,12 +897,17 @@ function updateAudioUxStatus(status, message, speakerId) {
 
   if (status === "speaking") {
     banner.className = "audio-ux-banner locked";
+    banner.querySelector(".audio-ux-icon").textContent = "🔒";
     inputEl.disabled = true;
     sendBtn.disabled = true;
+    if (micBtn) micBtn.disabled = true;
   } else {
     banner.className = "audio-ux-banner active";
+    banner.querySelector(".audio-ux-icon").textContent = "🎙️";
     inputEl.disabled = false;
     sendBtn.disabled = false;
+    if (micBtn) micBtn.disabled = false;
+    inputEl.placeholder = "声でお話しいただくか、ここに入力してください... (Enterで送信)";
     inputEl.focus();
   }
 }
@@ -664,7 +947,9 @@ function sendCandidateMessage() {
   const content = inputEl.value.trim();
   if (!content || !state.ws) return;
 
-  // 候補者のメッセージを即座に描画
+  // 送信時に音声認識を一時停止
+  stopSpeechRecognition();
+
   const list = document.getElementById("messages-list");
   const row = document.createElement("div");
   row.className = "message-row candidate";
@@ -677,7 +962,6 @@ function sendCandidateMessage() {
   list.appendChild(row);
   list.scrollTop = list.scrollHeight;
 
-  // サーバーへ送信
   state.ws.send(JSON.stringify({ type: "CANDIDATE_MESSAGE", content }));
   inputEl.value = "";
 }
@@ -702,6 +986,8 @@ function updatePhaseStepper(phase) {
 
 function triggerEvaluationMeeting() {
   if (!state.ws) return;
+  stopSpeechRecognition();
+  window.speechSynthesis.cancel();
   state.ws.send(JSON.stringify({ type: "RUN_EVALUATION_MEETING" }));
 }
 
@@ -729,7 +1015,6 @@ function appendMeetingUtterance(msg) {
 }
 
 function renderEvaluationReport(report) {
-  // 合否サマリー
   const banner = document.getElementById("verdict-banner");
   const typeEl = document.getElementById("verdict-decision");
   const sumEl = document.getElementById("verdict-summary-text");
@@ -738,10 +1023,8 @@ function renderEvaluationReport(report) {
   typeEl.textContent = report.decision_type || (report.passed ? "合格" : "見送り");
   sumEl.textContent = report.verdict_summary;
 
-  // レーダーチャート描画
   drawRadarChart(report.scores || []);
 
-  // スコア一覧表
   const scoresContainer = document.getElementById("scores-table-container");
   let tableHtml = `<table><thead><tr><th>評価項目</th><th>得点</th><th>理由・フィードバック</th></tr></thead><tbody>`;
   (report.scores || []).forEach((s) => {
@@ -756,7 +1039,6 @@ function renderEvaluationReport(report) {
   tableHtml += `</tbody></table>`;
   scoresContainer.innerHTML = tableHtml;
 
-  // 満点模範解答
   const answersContainer = document.getElementById("model-answers-list");
   answersContainer.innerHTML = "";
   (report.model_answers || []).forEach((ma, idx) => {
@@ -787,7 +1069,6 @@ function drawRadarChart(scores) {
   const numSides = scores.length;
   const angleStep = (Math.PI * 2) / numSides;
 
-  // 背景の同心円（目盛り）
   const levels = 5;
   for (let l = 1; l <= levels; l++) {
     const r = (radius / levels) * l;
@@ -805,7 +1086,6 @@ function drawRadarChart(scores) {
     ctx.stroke();
   }
 
-  // 放射線軸
   for (let i = 0; i < numSides; i++) {
     const angle = i * angleStep - Math.PI / 2;
     const x = centerX + radius * Math.cos(angle);
@@ -816,7 +1096,6 @@ function drawRadarChart(scores) {
     ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     ctx.stroke();
 
-    // 項目名ラベル
     const labelX = centerX + (radius + 22) * Math.cos(angle);
     const labelY = centerY + (radius + 18) * Math.sin(angle);
     ctx.fillStyle = "#94a3b8";
@@ -827,7 +1106,6 @@ function drawRadarChart(scores) {
     ctx.fillText(shortLabel, labelX, labelY);
   }
 
-  // データポリゴンの描画
   ctx.beginPath();
   scores.forEach((s, i) => {
     const scoreVal = Math.max(1, Math.min(10, s.score));
@@ -846,7 +1124,6 @@ function drawRadarChart(scores) {
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
-  // ポイント描画
   scores.forEach((s, i) => {
     const scoreVal = Math.max(1, Math.min(10, s.score));
     const r = (radius * (scoreVal / 10));

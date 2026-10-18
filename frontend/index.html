@@ -257,12 +257,17 @@
 
       <!-- チャット・タイムライン領域 -->
       <div class="chat-container">
-        <!-- 上部コントロール: 心の声メモ表示トグル -->
+        <!-- 上部コントロール: 心の声メモ ＆ 音声対話トグル -->
         <div class="chat-controls">
           <div class="toggle-container">
-            <span class="toggle-label">💭 面接官の「本音の心の声メモ」:</span>
+            <span class="toggle-label">💭 心の声メモ:</span>
             <button id="toggle-thoughts" class="btn-toggle active" title="練習モードでは心の声を表示、本番モードでは非表示">
               練習モード (ON)
+            </button>
+            <span class="toggle-divider">|</span>
+            <span class="toggle-label">🎙️ 音声対話:</span>
+            <button id="toggle-voice-mode" class="btn-toggle active" title="音声認識・読み上げをON/OFF">
+              音声対話 (ON)
             </button>
           </div>
           <button id="btn-force-finish" class="btn btn-danger btn-sm" title="途中で面接を切り上げて裏の合否判定ミーティングを開始">
@@ -283,9 +288,24 @@
           <span id="audio-ux-text">面接官が発話中です。話し終わるまでお待ちください...（マイク自動ロック中）</span>
         </div>
 
+        <!-- 音声入力波形インジケーター（音声認識中に表示） -->
+        <div id="mic-waveform-container" class="mic-waveform-container hidden">
+          <div class="waveform-bars">
+            <span class="wave-bar"></span>
+            <span class="wave-bar"></span>
+            <span class="wave-bar"></span>
+            <span class="wave-bar"></span>
+            <span class="wave-bar"></span>
+          </div>
+          <span class="waveform-text">お話しください...（話し終わると自動送信されます）</span>
+        </div>
+
         <div class="input-row">
+          <button id="btn-mic-toggle" class="btn-mic" title="マイク入力のON/OFF">
+            <span class="mic-icon">🎙️</span>
+          </button>
           <div class="input-wrapper">
-            <textarea id="candidate-chat-input" rows="2" placeholder="面接官からの質問に回答してください... (Enterで送信 / Shift+Enterで改行)"></textarea>
+            <textarea id="candidate-chat-input" rows="2" placeholder="声でお話しいただくか、ここに入力してください... (Enterで送信 / Shift+Enterで改行)"></textarea>
           </div>
           <button id="btn-send-message" class="btn btn-primary btn-send">
             <span>送信</span>
