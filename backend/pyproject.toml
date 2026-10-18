@@ -8,11 +8,16 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.143.5",
     "google-genai>=2.31.0",
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.0",
+    "pypdf>=6.21.1",
+    "python-docx>=1.2.0",
     "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.20",
     "rich>=15.0.0",
+    "uvicorn>=0.54.0",
 ]
 
 [build-system]

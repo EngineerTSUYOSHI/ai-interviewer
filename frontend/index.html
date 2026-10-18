@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Interviewer | マルチ面接官AIシミュレーター</title>
+  <meta name="description" content="志望企業・求人票・職務経歴書を取り込み、最大5名のAI面接官と対話するリアルな面接対策シミュレーター。裏の合否判定会議と満点模範解答を出力。">
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- ナビゲーションバー -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <span class="logo-icon">🎙️</span>
+        <span class="brand-title">AI Interviewer</span>
+        <span class="brand-badge">Multi-Agent</span>
+      </div>
+      <div class="nav-status">
+        <div class="status-indicator">
+          <span class="pulse-dot"></span>
+          <span id="connection-status-text">Ready</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- 1. 設定ビュー (Setup Screen) -->
+    <section id="setup-view" class="view-section active">
+      <div class="hero-banner">
+        <h1 class="hero-title">本番さながらの<span class="gradient-text">マルチ面接官シミュレーター</span></h1>
+        <p class="hero-subtitle">求人情報と経歴書を取り込み、最大5名のAI面接官（テックリード、人事、役員など）とリアルタイムに対話。終了後は「裏の合否判定会議」と「満点模範解答」を出力します。</p>
+        <div class="preset-cta-container">
+          <button id="btn-load-preset" class="btn btn-secondary btn-sm">
+            ✨ シニアエンジニア面接プリセットを読み込む
+          </button>
+        </div>
+      </div>
+
+      <div class="setup-grid">
+
+        <!-- 左カラム: 企業 & 求人票スマート取り込み -->
+        <div class="card glass-card">
+          <div class="card-header">
+            <div class="card-icon">🏢</div>
+            <div>
+              <h2 class="card-title">1. 志望企業 ＆ 求人票の取り込み</h2>
+              <p class="card-desc">URL、ファイル（PDF/Word/画像）、または直接入力</p>
+            </div>
+          </div>
+
+          <!-- 取り込みタブ切替 -->
+          <div class="tab-bar">
+            <button class="tab-btn active" data-tab="job-url">🌐 URL取り込み</button>
+            <button class="tab-btn" data-tab="job-file">📄 ファイル添付</button>
+            <button class="tab-btn" data-tab="job-text">✍️ テキスト入力</button>
+          </div>
+
+          <!-- URL取り込みタブ -->
+          <div id="tab-job-url" class="tab-content active">
+            <div class="input-group">
+              <label for="input-job-url">求人票または採用ページのURL</label>
+              <div class="input-with-btn">
+                <input type="url" id="input-job-url" placeholder="https://example.com/careers/backend-engineer">
+                <button id="btn-extract-job-url" class="btn btn-primary">AI解析</button>
+              </div>
+              <span class="hint-text">※ ログイン必須サイトや非公開求人はURLから直接取得できない場合があります</span>
+            </div>
+          </div>
+
+          <!-- ファイル取り込みタブ -->
+          <div id="tab-job-file" class="tab-content">
+            <div class="dropzone" id="dropzone-job">
+              <input type="file" id="file-job" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.webp" hidden>
+              <div class="dropzone-content">
+                <span class="dropzone-icon">📥</span>
+                <p>求人票PDF / Word / スクリーンショット画像</p>
+                <span class="dropzone-sub">クリックまたはドラッグ＆ドロップ</span>
+              </div>
+            </div>
+            <div id="file-job-status" class="file-status hidden"></div>
+          </div>
+
+          <!-- テキスト直接入力タブ -->
+          <div id="tab-job-text" class="tab-content">
+            <div class="input-group">
+              <label for="input-job-raw">求人票テキスト・募集要項</label>
+              <textarea id="input-job-raw" rows="4" placeholder="求人票の募集要項や仕事内容をそのまま貼り付けてください..."></textarea>
+              <button id="btn-extract-job-text" class="btn btn-primary btn-sm mt-2">テキストから要件を抽出</button>
+            </div>
+          </div>
+
+          <!-- エラー通知アラート -->
+          <div id="alert-job-error" class="alert-box alert-warning hidden"></div>
+
+          <!-- 抽出・設定フォーム -->
+          <div class="form-divider"><span>解析結果プレビュー</span></div>
+          <div class="form-body">
+            <div class="input-group">
+              <label for="company-name">企業名 *</label>
+              <input type="text" id="company-name" placeholder="例: 株式会社ネクストバリュー">
+            </div>
+            <div class="input-group">
+              <label for="company-business">事業内容・ビジネスモデル *</label>
+              <textarea id="company-business" rows="2" placeholder="例: 生成AIを活用した業務自動化SaaSプラットフォームの開発..."></textarea>
+            </div>
+            <div class="input-group">
+              <label for="company-culture">カルチャー・求める人物像</label>
+              <input type="text" id="company-culture" placeholder="例: 徹底した顧客価値主義、自発的なオーナーシップ、率直な議論">
+            </div>
+            <div class="input-group">
+              <label for="job-title">募集ポジション・職種名 *</label>
+              <input type="text" id="job-title" placeholder="例: シニアバックエンドエンジニア">
+            </div>
+            <div class="input-group">
+              <label for="job-description">業務内容</label>
+              <textarea id="job-description" rows="2" placeholder="例: API基盤・推論パイプラインの設計・開発..."></textarea>
+            </div>
+            <div class="input-group">
+              <label for="job-requirements">必須要件（カンマ区切り）</label>
+              <input type="text" id="job-requirements" placeholder="Python 3年以上, RDBMS設計, マイクロサービス">
+            </div>
+          </div>
+        </div>
+
+        <!-- 右カラム上: 候補者（職務経歴書）スマート取り込み -->
+        <div class="card glass-card">
+          <div class="card-header">
+            <div class="card-icon">👤</div>
+            <div>
+              <h2 class="card-title">2. あなたの経歴・職務経歴書の取り込み</h2>
+              <p class="card-desc">PDF/Word/画像アップロード、または直接入力</p>
+            </div>
+          </div>
+
+          <div class="tab-bar">
+            <button class="tab-btn active" data-tab="candidate-file">📄 ファイル添付</button>
+            <button class="tab-btn" data-tab="candidate-text">✍️ テキスト入力</button>
+          </div>
+
+          <div id="tab-candidate-file" class="tab-content active">
+            <div class="dropzone" id="dropzone-candidate">
+              <input type="file" id="file-candidate" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.webp" hidden>
+              <div class="dropzone-content">
+                <span class="dropzone-icon">📤</span>
+                <p>職務経歴書・履歴書（PDF / Word / 画像）</p>
+                <span class="dropzone-sub">クリックまたはドラッグ＆ドロップ</span>
+              </div>
+            </div>
+            <div id="file-candidate-status" class="file-status hidden"></div>
+          </div>
+
+          <div id="tab-candidate-text" class="tab-content">
+            <div class="input-group">
+              <label for="input-candidate-raw">経歴書テキスト・実績</label>
+              <textarea id="input-candidate-raw" rows="4" placeholder="職務経歴の要約や自己PRを貼り付けてください..."></textarea>
+              <button id="btn-extract-candidate-text" class="btn btn-primary btn-sm mt-2">経歴からサマリーを抽出</button>
+            </div>
+          </div>
+
+          <div id="alert-candidate-error" class="alert-box alert-warning hidden"></div>
+
+          <div class="form-divider"><span>候補者情報プレビュー</span></div>
+          <div class="form-body">
+            <div class="input-group">
+              <label for="candidate-name">氏名 *</label>
+              <input type="text" id="candidate-name" placeholder="例: 田中 雄大">
+            </div>
+            <div class="input-group">
+              <label for="candidate-resume">これまでの経歴概要・主要実績 *</label>
+              <textarea id="candidate-resume" rows="3" placeholder="例: バックエンドエンジニアとして5年。FinTech企業で決済基盤をマイクロサービス化..."></textarea>
+            </div>
+            <div class="input-group">
+              <label for="candidate-motivation">志望動機・今回アピールしたい点</label>
+              <textarea id="candidate-motivation" rows="2" placeholder="例: AI基盤の社会実装に貢献したく、高負荷分散設計の経験を活かしたい..."></textarea>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右カラム下: 面接官設定（1〜5名） -->
+        <div class="card glass-card full-width">
+          <div class="card-header flex-between">
+            <div class="flex-row items-center gap-2">
+              <div class="card-icon">🎭</div>
+              <div>
+                <h2 class="card-title">3. 面接官の設定（1〜最大5名）</h2>
+                <p class="card-desc">役割（必須）を設定すると、AIがリアルなペルソナ（性格・質問傾向）を自動補完します</p>
+              </div>
+            </div>
+            <button id="btn-add-interviewer" class="btn btn-outline btn-sm">＋ 面接官を追加</button>
+          </div>
+
+          <div id="interviewers-list" class="interviewers-grid">
+            <!-- JavaScript で動的生成 -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 面接開始 CTA -->
+      <div class="start-cta-bar">
+        <button id="btn-start-interview" class="btn btn-gradient btn-lg">
+          <span class="btn-icon">🎙️</span>
+          <span>面接シミュレーションを開始する</span>
+        </button>
+      </div>
+    </section>
+
+
+    <!-- 2. 面接ルームビュー (Interview Room Screen) -->
+    <section id="interview-view" class="view-section">
+
+      <!-- フェーズ進行バー -->
+      <div class="phase-stepper">
+        <div class="step-item active" data-phase="ORIENTATION">
+          <span class="step-num">1</span>
+          <span class="step-name">企業説明</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" data-phase="ORIENTATION_QA">
+          <span class="step-num">2</span>
+          <span class="step-name">質疑確認</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" data-phase="SELF_INTRODUCTION">
+          <span class="step-num">3</span>
+          <span class="step-name">自己紹介</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" data-phase="INTERVIEW_QA">
+          <span class="step-num">4</span>
+          <span class="step-name">メイン質問・深掘り</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" data-phase="REVERSE_QA">
+          <span class="step-num">5</span>
+          <span class="step-name">逆質問</span>
+        </div>
+        <div class="step-line"></div>
+        <div class="step-item" data-phase="CLOSING">
+          <span class="step-num">6</span>
+          <span class="step-name">終了挨拶</span>
+        </div>
+      </div>
+
+      <!-- 面接官アバターバー -->
+      <div class="interviewers-room-bar">
+        <div class="bar-title">同席面接官</div>
+        <div id="room-interviewers-container" class="room-interviewers-row">
+          <!-- JSでレンダリング -->
+        </div>
+      </div>
+
+      <!-- チャット・タイムライン領域 -->
+      <div class="chat-container">
+        <!-- 上部コントロール: 心の声メモ表示トグル -->
+        <div class="chat-controls">
+          <div class="toggle-container">
+            <span class="toggle-label">💭 面接官の「本音の心の声メモ」:</span>
+            <button id="toggle-thoughts" class="btn-toggle active" title="練習モードでは心の声を表示、本番モードでは非表示">
+              練習モード (ON)
+            </button>
+          </div>
+          <button id="btn-force-finish" class="btn btn-danger btn-sm" title="途中で面接を切り上げて裏の合否判定ミーティングを開始">
+            🛑 面接を切り上げて裏会議を見る
+          </button>
+        </div>
+
+        <div id="messages-list" class="messages-scroll">
+          <!-- 会話メッセージがここに追加される -->
+        </div>
+      </div>
+
+      <!-- 音声UXステータス ＆ 入力フッター -->
+      <div class="interview-footer">
+        <!-- 音声UXステータスバー -->
+        <div id="audio-ux-banner" class="audio-ux-banner locked">
+          <span class="audio-ux-icon">🔒</span>
+          <span id="audio-ux-text">面接官が発話中です。話し終わるまでお待ちください...（マイク自動ロック中）</span>
+        </div>
+
+        <div class="input-row">
+          <div class="input-wrapper">
+            <textarea id="candidate-chat-input" rows="2" placeholder="面接官からの質問に回答してください... (Enterで送信 / Shift+Enterで改行)"></textarea>
+          </div>
+          <button id="btn-send-message" class="btn btn-primary btn-send">
+            <span>送信</span>
+            <span class="send-icon">➤</span>
+          </button>
+        </div>
+      </div>
+
+    </section>
+
+
+    <!-- 3. 裏の合否判定ミーティング ＆ 総合レポートモーダル -->
+    <div id="evaluation-modal" class="modal-overlay hidden">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title-group">
+            <span class="modal-icon">👥</span>
+            <div>
+              <h2 class="modal-title">裏の合否判定ミーティング ＆ 総合選考レポート</h2>
+              <p class="modal-subtitle">候補者退室後、面接官同士が自律的に行った選考討議ログと模範解答です</p>
+            </div>
+          </div>
+          <button id="btn-close-modal" class="btn-close">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <!-- 合否サマリーバナー -->
+          <div id="verdict-banner" class="verdict-banner passed">
+            <div class="verdict-type" id="verdict-decision">合格</div>
+            <div class="verdict-summary" id="verdict-summary-text">田中雄大さんは高いバックエンド設計力と即戦力性を備えており、全員一致で合格と判定いたしました。</div>
+          </div>
+
+          <!-- 2カラム: 左=討議ログ、右=レーダーチャート & スコア -->
+          <div class="report-grid">
+            <div class="report-column">
+              <h3 class="section-title">💬 面接官自律討議の議事録</h3>
+              <div id="meeting-transcript-list" class="meeting-transcript-container">
+                <!-- 議事録が追加される -->
+              </div>
+            </div>
+
+            <div class="report-column">
+              <h3 class="section-title">📊 評価項目別スコア（10点満点）</h3>
+              <div class="chart-wrapper">
+                <canvas id="radarChart" width="360" height="260"></canvas>
+              </div>
+              <div id="scores-table-container" class="scores-table-container">
+                <!-- スコア一覧テーブル -->
+              </div>
+            </div>
+          </div>
+
+          <!-- 満点模範解答セクション -->
+          <div class="model-answers-section">
+            <h3 class="section-title">💯 主要質問に対する添削 ＆ 100点満点模範解答</h3>
+            <div id="model-answers-list" class="model-answers-grid">
+              <!-- 模範解答カード -->
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-download-report" class="btn btn-secondary">📥 レポートをMarkdownで保存</button>
+          <button id="btn-restart" class="btn btn-primary">🔄 もう一度面接を受ける</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
