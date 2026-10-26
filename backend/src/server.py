@@ -161,12 +161,6 @@ async def interview_websocket_endpoint(websocket: WebSocket):
                     "current_phase": coordinator.current_phase.value,
                 })
 
-                await websocket.send_json({
-                    "type": "SPEAKER_STATUS",
-                    "status": "waiting_candidate",
-                    "message": "面接官が話し終えました。あなたの発言をお待ちしています。",
-                })
-
             elif event_type == "CANDIDATE_MESSAGE":
                 if not coordinator:
                     await websocket.send_json({"type": "ERROR", "message": "セッションが開始されていません。"})
@@ -194,12 +188,6 @@ async def interview_websocket_endpoint(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "INTERVIEW_CLOSING",
                         "message": "面接の全フェーズが完了しました。裏の合否判定ミーティングを開始できます。",
-                    })
-                else:
-                    await websocket.send_json({
-                        "type": "SPEAKER_STATUS",
-                        "status": "waiting_candidate",
-                        "message": "面接官が話し終えました。マイクが有効です。",
                     })
 
             elif event_type == "RUN_EVALUATION_MEETING":

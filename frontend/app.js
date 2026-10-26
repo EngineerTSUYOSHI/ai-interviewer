@@ -10,6 +10,10 @@ const state = {
   isThoughtsVisible: true, // 練習モード (true) vs 本番モード (false)
   isVoiceMode: true,       // 音声対話 (true) vs テキスト対話のみ (false)
   isRecording: false,      // 現在マイク認識中か
+  currentAudioUxStatus: "waiting_candidate", // "speaking" | "waiting_candidate"
+  activeUtterances: [],    // GC回収防止用
+  ttsSafetyTimer: null,    // TTSフリーズ防止タイマー
+  transcriptFinal: "",     // 確定済み音声テキスト
   recognition: null,       // SpeechRecognition インスタンス
   silenceTimer: null,      // 発話後の無音自動送信タイマー
   interviewers: [],
@@ -128,51 +132,75 @@ function getInterviewerVoiceConfig(interviewerId) {
  * 面接官の発言を音声合成 (TTS) で読み上げる
  */
 function speakInterviewerUtterance(speakerId, text, onEndCallback) {
-  if (!state.isVoiceMode || !("speechSynthesis" in window)) {
+  if (state.ttsSafetyTimer) {
+    clearTimeout(state.ttsSafetyTimer);
+    state.ttsSafetyTimer = null;
+  }
+
+  // 面接官発話中ステータスにして入力・マイクを自動ロック
+  updateAudioUxStatus("speaking", "面接官が発話中です。話し終わるまでお待ちください...（マイク自動ロック中）", speakerId);
+  stopSpeechRecognition();
+
+  function finishSpeaking() {
+    if (state.ttsSafetyTimer) {
+      clearTimeout(state.ttsSafetyTimer);
+      state.ttsSafetyTimer = null;
+    }
+    state.activeUtterances = [];
+    updateAudioUxStatus("waiting_candidate", "面接官が話し終えました。マイクが有効です。お話しください。", null);
     if (onEndCallback) onEndCallback();
+    if (state.isVoiceMode) {
+      startSpeechRecognition();
+    }
+  }
+
+  // 音声対話OFFまたは非対応ブラウザの場合は短い余白を挟んで完了
+  if (!state.isVoiceMode || !("speechSynthesis" in window)) {
+    setTimeout(finishSpeaking, 600);
     return;
   }
 
-  // 面接官が発話中はマイクを完全に自動ロック（咳払いやノイズ誤認識を防止）
-  stopSpeechRecognition();
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(text);
   const voiceConfig = getInterviewerVoiceConfig(speakerId);
 
-  utterance.pitch = voiceConfig.pitch;
-  utterance.rate = voiceConfig.rate;
-  utterance.lang = "ja-JP";
+  // Chromeの直前cancel巻き込み即死バグ対策:
+  // cancel() を呼んだ後は必ず80msの遅延を置いてから speak() を実行する
+  window.speechSynthesis.cancel();
 
-  // ブラウザ日本語音声があれば設定
-  if (state.availableVoices.length > 0) {
-    // 日本語音声の中から選択
-    utterance.voice = state.availableVoices[0];
-  }
+  // セーフティタイマー: 万が一ブラウザがonendを出さずに停止しても最大時間で必ずアンロック
+  const maxWaitMs = Math.max(5000, (text.length * 150) + 4000);
+  state.ttsSafetyTimer = setTimeout(() => {
+    console.warn("TTS safety timer triggered to release lock");
+    finishSpeaking();
+  }, maxWaitMs);
 
-  utterance.onstart = () => {
-    updateAudioUxStatus("speaking", "面接官が発話中です。話し終わるまでお待ちください...（マイク自動ロック中）", speakerId);
-  };
+  setTimeout(() => {
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.pitch = voiceConfig.pitch;
+      utterance.rate = voiceConfig.rate;
+      utterance.lang = "ja-JP";
 
-  utterance.onend = () => {
-    updateAudioUxStatus("waiting_candidate", "面接官が話し終えました。マイクが有効です。お話しください。", null);
-    if (onEndCallback) onEndCallback();
-    // 話し終わったら自動的にマイクを有効化
-    if (state.isVoiceMode) {
-      startSpeechRecognition();
+      if (state.availableVoices.length > 0) {
+        utterance.voice = state.availableVoices[0];
+      }
+
+      utterance.onend = () => {
+        finishSpeaking();
+      };
+
+      utterance.onerror = (e) => {
+        console.warn("SpeechSynthesis error/canceled:", e);
+        finishSpeaking();
+      };
+
+      // GC回収防止のため参照を保持
+      state.activeUtterances = [utterance];
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error("SpeechSynthesis execution error:", err);
+      finishSpeaking();
     }
-  };
-
-  utterance.onerror = (e) => {
-    console.error("SpeechSynthesis Error:", e);
-    updateAudioUxStatus("waiting_candidate", "面接官が話し終えました。マイクが有効です。", null);
-    if (onEndCallback) onEndCallback();
-    if (state.isVoiceMode) {
-      startSpeechRecognition();
-    }
-  };
-
-  window.speechSynthesis.speak(utterance);
+  }, 80);
 }
 
 // ==========================================================================
@@ -198,25 +226,23 @@ function initSpeechRecognition() {
   };
 
   rec.onresult = (event) => {
-    let interim = "";
-    let final = "";
+    let currentInterim = "";
 
     for (let i = event.resultIndex; i < event.results.length; ++i) {
       if (event.results[i].isFinal) {
-        final += event.results[i][0].transcript;
+        state.transcriptFinal += event.results[i][0].transcript + " ";
       } else {
-        interim += event.results[i][0].transcript;
+        currentInterim += event.results[i][0].transcript;
       }
     }
 
     const inputEl = document.getElementById("candidate-chat-input");
-    if (final) {
-      inputEl.value = (inputEl.value + " " + final).trim();
-      // 発話後に2.5秒間無音なら自動送信
+    // 確定テキスト + 現在認識中の暫定テキストを入力欄にリアルタイム反映！
+    const fullText = (state.transcriptFinal + currentInterim).trim();
+    if (fullText) {
+      inputEl.value = fullText;
+      // 声が検出されたので無音タイマーをリセット
       resetSilenceTimer();
-    } else if (interim) {
-      inputEl.placeholder = `聞き取り中: ${interim}...`;
-      clearTimeout(state.silenceTimer);
     }
   };
 
@@ -232,6 +258,13 @@ function initSpeechRecognition() {
   rec.onend = () => {
     state.isRecording = false;
     updateMicButtonState(false);
+
+    // 途切れ防止: 候補者の発言待ちステータスであれば、即座にマイクを自動再接続！
+    if (state.isVoiceMode && state.currentAudioUxStatus === "waiting_candidate") {
+      setTimeout(() => {
+        startSpeechRecognition();
+      }, 100);
+    }
   };
 
   state.recognition = rec;
@@ -260,7 +293,7 @@ function resetSilenceTimer() {
   clearTimeout(state.silenceTimer);
   state.silenceTimer = setTimeout(() => {
     const inputEl = document.getElementById("candidate-chat-input");
-    if (inputEl.value.trim() && state.isRecording) {
+    if (inputEl.value.trim() && state.currentAudioUxStatus === "waiting_candidate") {
       sendCandidateMessage();
     }
   }, 2500); // 2.5秒の無音で自動送信
@@ -817,6 +850,10 @@ function handleWsEvent(data) {
       break;
 
     case "SPEAKER_STATUS":
+      // もし面接官の音声読み上げ実行中であれば、外部からの早すぎるwaiting_candidateは無視する
+      if (data.status === "waiting_candidate" && state.activeUtterances && state.activeUtterances.length > 0) {
+        break;
+      }
       updateAudioUxStatus(data.status, data.message, data.speaker_id);
       break;
 
@@ -824,12 +861,19 @@ function handleWsEvent(data) {
       appendInterviewerMessage(data.utterance);
       if (data.current_phase) updatePhaseStepper(data.current_phase);
 
-      // 面接官の発言をTTSで読み上げ（読み上げ中はマイク自動ロック ➔ 終了後にマイク有効化）
-      speakInterviewerUtterance(data.utterance.speaker_id, data.utterance.content);
+      // 面接官の発言をTTSで読み上げ（読み上げ中はマイク自動ロック ➔ 終了後にマイク自動有効化）
+      speakInterviewerUtterance(data.utterance.speaker_id, data.utterance.content, () => {
+        if (data.current_phase === "CLOSING") {
+          updateAudioUxStatus("active", "面接が終了しました。右上の「裏会議を見る」ボタンを押してください。");
+        }
+      });
       break;
 
     case "INTERVIEW_CLOSING":
-      updateAudioUxStatus("active", "面接が終了しました。右上の「裏会議を見る」ボタンを押してください。");
+      // 読み上げ完了前ならバナーは書き換えず、読み上げコールバックに委ねる
+      if (!state.activeUtterances || state.activeUtterances.length === 0) {
+        updateAudioUxStatus("active", "面接が終了しました。右上の「裏会議を見る」ボタンを押してください。");
+      }
       break;
 
     case "EVALUATION_STARTED":
@@ -880,6 +924,7 @@ function renderRoomInterviewers() {
 }
 
 function updateAudioUxStatus(status, message, speakerId) {
+  state.currentAudioUxStatus = status;
   const banner = document.getElementById("audio-ux-banner");
   const textEl = document.getElementById("audio-ux-text");
   const inputEl = document.getElementById("candidate-chat-input");
@@ -947,8 +992,10 @@ function sendCandidateMessage() {
   const content = inputEl.value.trim();
   if (!content || !state.ws) return;
 
-  // 送信時に音声認識を一時停止
+  // 送信時に音声認識を一時停止し、蓄積テキストをクリア
   stopSpeechRecognition();
+  state.transcriptFinal = "";
+  clearTimeout(state.silenceTimer);
 
   const list = document.getElementById("messages-list");
   const row = document.createElement("div");
@@ -998,8 +1045,8 @@ function openEvaluationModal() {
   const modal = document.getElementById("evaluation-modal");
   modal.classList.remove("hidden");
   document.getElementById("meeting-transcript-list").innerHTML = "";
-  document.getElementById("model-answers-list").innerHTML = "";
-  document.getElementById("scores-table-container").innerHTML = "";
+  document.getElementById("good-points-list").innerHTML = "";
+  document.getElementById("improvement-points-list").innerHTML = "";
 }
 
 function appendMeetingUtterance(msg) {
@@ -1015,129 +1062,39 @@ function appendMeetingUtterance(msg) {
 }
 
 function renderEvaluationReport(report) {
+  state.lastEvaluationReport = report;
+
   const banner = document.getElementById("verdict-banner");
   const typeEl = document.getElementById("verdict-decision");
   const sumEl = document.getElementById("verdict-summary-text");
 
-  banner.className = `verdict-banner ${report.passed ? "passed" : "failed"}`;
+  let statusClass = "pending";
+  if (report.passed) {
+    statusClass = "passed";
+  } else if (report.decision_type === "見送り") {
+    statusClass = "failed";
+  }
+
+  banner.className = `verdict-banner ${statusClass}`;
   typeEl.textContent = report.decision_type || (report.passed ? "合格" : "見送り");
   sumEl.textContent = report.verdict_summary;
 
-  drawRadarChart(report.scores || []);
-
-  const scoresContainer = document.getElementById("scores-table-container");
-  let tableHtml = `<table><thead><tr><th>評価項目</th><th>得点</th><th>理由・フィードバック</th></tr></thead><tbody>`;
-  (report.scores || []).forEach((s) => {
-    tableHtml += `
-      <tr>
-        <td><strong>${escapeHtml(s.category)}</strong></td>
-        <td><span class="score-badge">${s.score}</span> / 10</td>
-        <td style="color: var(--text-muted);">${escapeHtml(s.reason)}</td>
-      </tr>
-    `;
+  // 良かった点
+  const goodList = document.getElementById("good-points-list");
+  goodList.innerHTML = "";
+  (report.good_points || []).forEach((pt) => {
+    const li = document.createElement("li");
+    li.textContent = pt;
+    goodList.appendChild(li);
   });
-  tableHtml += `</tbody></table>`;
-  scoresContainer.innerHTML = tableHtml;
 
-  const answersContainer = document.getElementById("model-answers-list");
-  answersContainer.innerHTML = "";
-  (report.model_answers || []).forEach((ma, idx) => {
-    const card = document.createElement("div");
-    card.className = "model-answer-card";
-    card.innerHTML = `
-      <div class="ma-question">Q${idx + 1}: ${escapeHtml(ma.question)}</div>
-      <div class="ma-box ma-candidate"><strong>あなたの回答:</strong><br>${escapeHtml(ma.candidate_answer)}</div>
-      <div class="ma-box ma-critique"><strong>改善指摘・減点理由:</strong><br>${escapeHtml(ma.critique)}</div>
-      <div class="ma-box ma-perfect"><strong>💯 100点満点の模範解答例:</strong><br>${escapeHtml(ma.model_answer)}</div>
-    `;
-    answersContainer.appendChild(card);
-  });
-}
-
-function drawRadarChart(scores) {
-  const canvas = document.getElementById("radarChart");
-  const ctx = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = Math.min(centerX, centerY) - 40;
-
-  ctx.clearRect(0, 0, width, height);
-  if (!scores || scores.length === 0) return;
-
-  const numSides = scores.length;
-  const angleStep = (Math.PI * 2) / numSides;
-
-  const levels = 5;
-  for (let l = 1; l <= levels; l++) {
-    const r = (radius / levels) * l;
-    ctx.beginPath();
-    for (let i = 0; i < numSides; i++) {
-      const angle = i * angleStep - Math.PI / 2;
-      const x = centerX + r * Math.cos(angle);
-      const y = centerY + r * Math.sin(angle);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.lineWidth = 1;
-    ctx.stroke();
-  }
-
-  for (let i = 0; i < numSides; i++) {
-    const angle = i * angleStep - Math.PI / 2;
-    const x = centerX + radius * Math.cos(angle);
-    const y = centerY + radius * Math.sin(angle);
-    ctx.beginPath();
-    ctx.moveTo(centerX, centerY);
-    ctx.lineTo(x, y);
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
-    ctx.stroke();
-
-    const labelX = centerX + (radius + 22) * Math.cos(angle);
-    const labelY = centerY + (radius + 18) * Math.sin(angle);
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "11px Inter, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const shortLabel = scores[i].category.length > 8 ? scores[i].category.substring(0, 7) + "…" : scores[i].category;
-    ctx.fillText(shortLabel, labelX, labelY);
-  }
-
-  ctx.beginPath();
-  scores.forEach((s, i) => {
-    const scoreVal = Math.max(1, Math.min(10, s.score));
-    const r = (radius * (scoreVal / 10));
-    const angle = i * angleStep - Math.PI / 2;
-    const x = centerX + r * Math.cos(angle);
-    const y = centerY + r * Math.sin(angle);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.closePath();
-
-  ctx.fillStyle = "rgba(6, 182, 212, 0.25)";
-  ctx.fill();
-  ctx.strokeStyle = "#06b6d4";
-  ctx.lineWidth = 2.5;
-  ctx.stroke();
-
-  scores.forEach((s, i) => {
-    const scoreVal = Math.max(1, Math.min(10, s.score));
-    const r = (radius * (scoreVal / 10));
-    const angle = i * angleStep - Math.PI / 2;
-    const x = centerX + r * Math.cos(angle);
-    const y = centerY + r * Math.sin(angle);
-
-    ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
-    ctx.fillStyle = "#ffffff";
-    ctx.fill();
-    ctx.strokeStyle = "#4f46e5";
-    ctx.lineWidth = 2;
-    ctx.stroke();
+  // 悪かった点・改善すべき課題
+  const impList = document.getElementById("improvement-points-list");
+  impList.innerHTML = "";
+  (report.improvement_points || []).forEach((pt) => {
+    const li = document.createElement("li");
+    li.textContent = pt;
+    impList.appendChild(li);
   });
 }
 
@@ -1147,15 +1104,25 @@ function downloadReportMarkdown() {
 
   let md = `# 🎙️ 面接総合評価レポート\n\n`;
   md += `## ■ 最終選考結果: ${report.decision_type} (${report.passed ? "合格" : "見送り"})\n\n`;
-  md += `### 総括フィードバック:\n${report.verdict_summary}\n\n`;
-  md += `## ■ 評価項目別スコア\n\n| 項目 | 得点 | 採点理由 |\n|---|---|---|\n`;
-  (report.scores || []).forEach(s => {
-    md += `| ${s.category} | ${s.score}/10 | ${s.reason} |\n`;
+  md += `### 【合否総括・選考理由】\n${report.verdict_summary}\n\n`;
+
+  md += `### 【👍 良かった点・評価されたポイント】\n`;
+  (report.good_points || []).forEach((pt) => {
+    md += `- ${pt}\n`;
   });
-  md += `\n## ■ 満点模範解答集\n\n`;
-  (report.model_answers || []).forEach((ma, i) => {
-    md += `### Q${i+1}: ${ma.question}\n- **あなたの回答:** ${ma.candidate_answer}\n- **改善指摘:** ${ma.critique}\n- **💯 100点満点模範解答:** ${ma.model_answer}\n\n`;
+  md += `\n`;
+
+  md += `### 【⚠️ 懸念・悪かった点・改善すべき課題】\n`;
+  (report.improvement_points || []).forEach((pt) => {
+    md += `- ${pt}\n`;
   });
+  md += `\n`;
+
+  md += `### 【💬 面接官による裏の選考会議 議事録】\n`;
+  (report.meeting_transcript || []).forEach((m) => {
+    md += `- **${m.interviewer_name} (${m.role}):** ${m.content}\n`;
+  });
+  md += `\n`;
 
   const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
   const a = document.createElement("a");

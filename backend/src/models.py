@@ -112,26 +112,11 @@ class MeetingUtterance(BaseModel):
     content: str = Field(..., description="討議での発言内容")
 
 
-class EvaluationScore(BaseModel):
-    """レーダーチャート用評価スコア"""
-    category: str = Field(..., description="評価項目 (例: '技術力・設計思想', '論理的思考・説明力', 'カルチャーマッチ', '主体性・熱意')")
-    score: int = Field(..., ge=1, le=10, description="1〜10点の評価スコア")
-    reason: str = Field(..., description="採点理由・評価した根拠")
-
-
-class ModelAnswer(BaseModel):
-    """面接質問に対する満点模範解答"""
-    question: str = Field(..., description="面接中に面接官から投げかけられた質問")
-    candidate_answer: str = Field(..., description="候補者が実際に行った回答")
-    critique: str = Field(..., description="候補者回答の弱点・不足していた視点・懸念された点")
-    model_answer: str = Field(..., description="この企業・求人において合格を勝ち取るための100点満点の模範解答例")
-
-
 class EvaluationReport(BaseModel):
     """裏の合否判定会議の総合レポート"""
     passed: bool = Field(..., description="最終合否判定 (True: 合格 / False: 見送り)")
     decision_type: str = Field(..., description="判定結果 ('合格' | '見送り' | '保留')")
-    verdict_summary: str = Field(..., description="面接官全員による最終合否理由の総括コメント")
+    verdict_summary: str = Field(..., description="合否判定の総括・理由サマリー")
+    good_points: list[str] = Field(..., description="面接で評価された点・良かった点（箇条書き3〜5点）")
+    improvement_points: list[str] = Field(..., description="懸念された点・悪かった点・改善すべき点（箇条書き3〜5点）")
     meeting_transcript: list[MeetingUtterance] = Field(..., description="面接官同士のリアルな裏会議議事録（ディスカッション履歴）")
-    scores: list[EvaluationScore] = Field(..., description="評価カテゴリ別スコア（レーダーチャート描画用）")
-    model_answers: list[ModelAnswer] = Field(..., description="各主要質問に対する添削と100点満点模範解答")
