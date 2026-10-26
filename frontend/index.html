@@ -325,7 +325,7 @@
             <span class="modal-icon">👥</span>
             <div>
               <h2 class="modal-title">裏の合否判定ミーティング ＆ 総合選考レポート</h2>
-              <p class="modal-subtitle">候補者退室後、面接官同士が自律的に行った選考討議ログと模範解答です</p>
+              <p class="modal-subtitle">候補者退室後、面接官同士が自律的に行った選考討議ログと詳細フィードバックです</p>
             </div>
           </div>
           <button id="btn-close-modal" class="btn-close">✕</button>
@@ -338,31 +338,34 @@
             <div class="verdict-summary" id="verdict-summary-text">田中雄大さんは高いバックエンド設計力と即戦力性を備えており、全員一致で合格と判定いたしました。</div>
           </div>
 
-          <!-- 2カラム: 左=討議ログ、右=レーダーチャート & スコア -->
-          <div class="report-grid">
-            <div class="report-column">
-              <h3 class="section-title">💬 面接官自律討議の議事録</h3>
-              <div id="meeting-transcript-list" class="meeting-transcript-container">
-                <!-- 議事録が追加される -->
-              </div>
+          <!-- 総評: 良かった点 ＆ 悪かった点（箇条書きカード） -->
+          <div class="points-grid">
+            <div class="points-card points-good">
+              <h3 class="section-title text-success">
+                <span>👍</span> 良かった点・評価されたポイント
+              </h3>
+              <ul id="good-points-list" class="points-list">
+                <!-- 箇条書き動的生成 -->
+              </ul>
             </div>
 
-            <div class="report-column">
-              <h3 class="section-title">📊 評価項目別スコア（10点満点）</h3>
-              <div class="chart-wrapper">
-                <canvas id="radarChart" width="360" height="260"></canvas>
-              </div>
-              <div id="scores-table-container" class="scores-table-container">
-                <!-- スコア一覧テーブル -->
-              </div>
+            <div class="points-card points-improvement">
+              <h3 class="section-title text-warning">
+                <span>⚠️</span> 懸念・悪かった点・改善すべき課題
+              </h3>
+              <ul id="improvement-points-list" class="points-list">
+                <!-- 箇条書き動的生成 -->
+              </ul>
             </div>
           </div>
 
-          <!-- 満点模範解答セクション -->
-          <div class="model-answers-section">
-            <h3 class="section-title">💯 主要質問に対する添削 ＆ 100点満点模範解答</h3>
-            <div id="model-answers-list" class="model-answers-grid">
-              <!-- 模範解答カード -->
+          <!-- 面接官の裏会議 討議ログ -->
+          <div class="meeting-section">
+            <h3 class="section-title">
+              <span>💬</span> 面接官による裏の選考会議 議事録
+            </h3>
+            <div id="meeting-transcript-list" class="meeting-transcript-container">
+              <!-- 議事録が追加される -->
             </div>
           </div>
         </div>
